@@ -7,42 +7,34 @@ import {
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import emailjs from "@emailjs/browser";
+import ROADS_DATA from "./roadsData.json";
 
 /* ============================================================
    СПРАВОЧНИКИ
    ============================================================ */
 
-const ROADS = [
-  { name: "Астана - Щучинск", category: 1, since: "2013" },
-  { name: "Астана - Темиртау", category: 1, since: "янв 2019" },
-  { name: "Алматы - Хоргос", category: 1, since: "янв 2019" },
-  { name: "Алматы - Конаев", category: 1, since: "янв 2019" },
-  { name: "Астана - Павлодар", category: 1, since: "ноя 2021" },
-  { name: "Тараз - Кайнар", category: 2, since: "ноя 2021" },
-  { name: "Шымкент - Кызылорда", category: 2, since: "ноя 2021" },
-  { name: "Шымкент - Тараз", category: 1, since: "ноя 2021" },
-  { name: "Шымкент - гр. Узбекистана", category: 1, since: "ноя 2021" },
-  { name: "Конаев - Талдыкорган", category: 2, since: "ноя 2021" },
-  { name: "Щучинск - Кокшетау", category: 2, since: "ноя 2021" },
-  { name: "Павлодар - Калбатау", category: 2, since: "2023" },
-  { name: "Бейнеу - Акжигит", category: 2, since: "2023" },
-  { name: "Уральск - Самара", category: 1, since: "2023" },
-  { name: "Павлодар - Омск", category: 2, since: "2023" },
-  { name: "Кокшетау - Петропавловск", category: 2, since: "2023" },
-  { name: "Уральск - Саратов", category: 2, since: "2023" },
-  { name: "Кызылорда - Аральск", category: 2, since: "2025" },
-  { name: "Костанай - гр. РФ (Троицк)", category: 2, since: "2025" },
-  { name: "Актобе - гр. РФ (Оренбург)", category: 2, since: "2025" },
-  { name: "Костанай - Денисовка", category: 2, since: "2025" },
-  { name: "Обход г. Тараз", category: 1, since: "2025" },
-  { name: "Балхаш - Бурылбайтал", category: 2, since: "2025" },
-  { name: "Шу - Бурылбайтал", category: 2, since: "2025" },
-  { name: "Кандыагаш - Макат", category: 2, since: "2025" },
-  { name: "Ушарал - Достык", category: 2, since: "2025" },
-  { name: "Караганда - Балхаш - Бурылбайтал", category: 2, since: "10.07.2026" },
-  { name: "Бурылбайтал - Курты", category: 2, since: "10.07.2026" },
-  { name: "Талдыкорган - Усть-Каменогорск", category: 2, since: "11.07.2026" },
+// Реальный реестр: область -> тип ремонта -> список дорог/участков
+// (Строительство и реконструкция / Реконструкция / Капитальный ремонт / Средний ремонт).
+// Технадзор контролирует не только платные дороги, поэтому справочник охватывает
+// все области РК; при необходимости можно добавить свой вариант прямо в форме.
+const REGIONS = Object.keys(ROADS_DATA);
+
+// Типы ремонта — сведены из реестра выше, порядок задан вручную для удобства
+const REPAIR_TYPES_ORDER = ["Строительство и реконструкция", "Реконструкция", "Капитальный ремонт", "Средний ремонт"];
+const REPAIR_TYPES = [
+  ...REPAIR_TYPES_ORDER,
+  ...[...new Set(Object.values(ROADS_DATA).flatMap((wt) => Object.keys(wt)))].filter(
+    (t) => !REPAIR_TYPES_ORDER.includes(t)
+  ),
 ];
+
+function roadsFor(region, repairType) {
+  if (!region || !ROADS_DATA[region]) return [];
+  if (repairType && ROADS_DATA[region][repairType]) return ROADS_DATA[region][repairType];
+  if (repairType) return [];
+  // без выбранного типа ремонта — показать все дороги региона
+  return [...new Set(Object.values(ROADS_DATA[region]).flat())];
+}
 
 // Типы работ / контроля — используются во всех трёх формах
 const WORK_TYPES = [
@@ -393,6 +385,65 @@ function Field({ label, error, hint, children }) {
   );
 }
 
+// Выпадающий список с возможностью вписать свой вариант, если нужного нет в реестре.
+// value/onChange работают со строкой — либо выбранной из options, либо введённой вручную.
+const CUSTOM_OPTION = "__custom__";
+
+function ComboSelect({ value, onChange, options, placeholder, disabled }) {
+  const isKnownValue = value === "" || options.includes(value);
+  const [customMode, setCustomMode] = useState(!isKnownValue && value !== "");
+
+  useEffect(() => {
+    if (value === "" || options.includes(value)) {
+      setCustomMode(false);
+    }
+  }, [options]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (customMode) {
+    return (
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Впишите свой вариант"
+          style={{ ...input, flex: 1 }}
+          autoFocus
+        />
+        <button
+          type="button"
+          onClick={() => { setCustomMode(false); onChange(""); }}
+          style={{ ...iconToggle, flexShrink: 0 }}
+          title="Вернуться к списку"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => {
+        if (e.target.value === CUSTOM_OPTION) {
+          setCustomMode(true);
+          onChange("");
+        } else {
+          onChange(e.target.value);
+        }
+      }}
+      style={input}
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>{o}</option>
+      ))}
+      <option value={CUSTOM_OPTION}>+ Добавить свой вариант...</option>
+    </select>
+  );
+}
+
 function LocationField({ coords, setCoords, error }) {
   const [locStatus, setLocStatus] = useState("idle");
   const [locError, setLocError] = useState("");
@@ -466,6 +517,8 @@ const ENTRY_TABS = [
 
 function TechForm({ onSubmit }) {
   const [entryType, setEntryType] = useState("stage");
+  const [region, setRegion] = useState("");
+  const [repairType, setRepairType] = useState("");
   const [road, setRoad] = useState("");
   const [km, setKm] = useState("");
   const [contractor, setContractor] = useState("");
@@ -493,15 +546,18 @@ function TechForm({ onSubmit }) {
   const [unitPrice, setUnitPrice] = useState("");
 
   const reset = () => {
-    setRoad(""); setKm(""); setContractor(""); setWorkType(""); setCoords(null);
+    setRegion(""); setRepairType(""); setRoad(""); setKm(""); setContractor(""); setWorkType(""); setCoords(null);
     setPhotos([]); setComment(""); setErrors({}); setConclusion("pass");
     setVolumePlanned(""); setVolumeActual(""); setSeverity("medium"); setDeadline("");
     setContractorEmail(""); setQuantity(""); setUnitPrice(""); setSent(false);
   };
 
+  const roadOptions = roadsFor(region, repairType);
+
   const validate = () => {
     const e = {};
-    if (!road) e.road = "Выберите платную дорогу";
+    if (!region) e.region = "Выберите область";
+    if (!road) e.road = "Выберите или впишите дорогу / участок";
     if (!km) e.km = "Укажите километраж / участок";
     if (!contractor) e.contractor = "Укажите подрядчика";
     if (!engineerName) e.engineerName = "Укажите ваше имя (инженер технадзора)";
@@ -519,7 +575,7 @@ function TechForm({ onSubmit }) {
     const base = {
       id: uid(),
       type: entryType,
-      road, km, contractor, engineerName,
+      region, repairType, road, km, contractor, engineerName,
       photos: photos.map((p) => p.src),
       lat: coords.lat, lng: coords.lng,
       comment,
@@ -590,13 +646,33 @@ function TechForm({ onSubmit }) {
           ))}
         </div>
 
-        <Field label="Платная дорога" error={errors.road}>
-          <select value={road} onChange={(e) => setRoad(e.target.value)} style={input}>
-            <option value="">Выберите дорогу (всего 28 участков)</option>
-            {ROADS.map((r) => (
-              <option key={r.name} value={r.name}>{r.name}</option>
-            ))}
-          </select>
+        <Field label="Область" error={errors.region}>
+          <ComboSelect
+            value={region}
+            onChange={(v) => { setRegion(v); setRepairType(""); setRoad(""); }}
+            options={REGIONS}
+            placeholder="Выберите область (все регионы РК)"
+          />
+        </Field>
+
+        <Field label="Тип ремонта" hint="Необязательно — сужает список дорог ниже">
+          <ComboSelect
+            value={repairType}
+            onChange={(v) => { setRepairType(v); setRoad(""); }}
+            options={REPAIR_TYPES}
+            placeholder="Любой тип ремонта"
+            disabled={!region}
+          />
+        </Field>
+
+        <Field label="Дорога / участок" error={errors.road} hint="Нет нужного участка в списке — впишите вручную">
+          <ComboSelect
+            value={road}
+            onChange={setRoad}
+            options={roadOptions}
+            placeholder={region ? "Выберите дорогу" : "Сначала выберите область"}
+            disabled={!region}
+          />
         </Field>
 
         <div style={{ display: "flex", gap: 10 }}>
@@ -618,10 +694,7 @@ function TechForm({ onSubmit }) {
 
         {entryType !== "volume" && (
           <Field label="Вид работ" error={errors.workType}>
-            <select value={workType} onChange={(e) => setWorkType(e.target.value)} style={input}>
-              <option value="">Выберите вид работ</option>
-              {WORK_TYPES.map((w) => <option key={w} value={w}>{w}</option>)}
-            </select>
+            <ComboSelect value={workType} onChange={setWorkType} options={WORK_TYPES} placeholder="Выберите вид работ" />
           </Field>
         )}
 
@@ -893,6 +966,8 @@ function EntryDetailModal({ entry, onClose, onKajDecision, onDefectStatusChange 
 
         <table style={{ width: "100%", fontSize: 13, marginBottom: 14 }}>
           <tbody>
+            {entry.region && <tr><td style={tdLabel}>Область</td><td style={tdVal}>{entry.region}</td></tr>}
+            {entry.repairType && <tr><td style={tdLabel}>Тип ремонта</td><td style={tdVal}>{entry.repairType}</td></tr>}
             <tr><td style={tdLabel}>Подрядчик</td><td style={tdVal}>{entry.contractor}</td></tr>
             <tr><td style={tdLabel}>Инженер</td><td style={tdVal}>{entry.engineerName}</td></tr>
             {entry.workType && <tr><td style={tdLabel}>Вид работ</td><td style={tdVal}>{entry.workType}</td></tr>}
@@ -1024,6 +1099,7 @@ function ResolveDefectModal({ onCancel, onConfirm }) {
 function Dashboard({ entries, refresh }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [kajFilter, setKajFilter] = useState("all");
+  const [regionFilter, setRegionFilter] = useState("all");
   const [roadFilter, setRoadFilter] = useState("all");
   const [selected, setSelected] = useState(null);
   const [view, setView] = useState("list");
@@ -1033,6 +1109,7 @@ function Dashboard({ entries, refresh }) {
   const filtered = entries.filter((r) => {
     if (typeFilter !== "all" && r.type !== typeFilter) return false;
     if (kajFilter !== "all" && (r.kajStatus || "pending") !== kajFilter) return false;
+    if (regionFilter !== "all" && r.region !== regionFilter) return false;
     if (roadFilter !== "all" && r.road !== roadFilter) return false;
     return true;
   });
@@ -1098,7 +1175,8 @@ function Dashboard({ entries, refresh }) {
   const totalVolumeSum = entries.filter((r) => r.type === "volume" && r.sum).reduce((s, r) => s + r.sum, 0);
   const failCount = entries.filter((r) => (r.type === "stage" || r.type === "hidden") && r.conclusion === "fail").length;
 
-  const roadsWithEntries = [...new Set(entries.map((r) => r.road))];
+  const regionsWithEntries = [...new Set(entries.map((r) => r.region).filter(Boolean))];
+  const roadsWithEntries = [...new Set(entries.filter((r) => regionFilter === "all" || r.region === regionFilter).map((r) => r.road))];
 
   // Сводка по подрядчикам
   const byContractor = {};
@@ -1119,7 +1197,7 @@ function Dashboard({ entries, refresh }) {
       <div style={{ marginBottom: 14 }}>
         <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 500 }}>Панель КАЖ — надзор над технадзором</h2>
         <p style={{ margin: 0, fontSize: 12.5, color: "var(--text-muted)" }}>
-          Сеть: 28 платных участков, 6 290,59 км (13 участков I категории, 15 участков II–III категории)
+          Охват: {REGIONS.length} областей / регионов РК — не только платные дороги, но и республиканские и местные автодороги
         </p>
       </div>
 
@@ -1224,12 +1302,24 @@ function Dashboard({ entries, refresh }) {
         ))}
       </div>
 
-      {roadsWithEntries.length > 1 && (
-        <div style={{ marginBottom: 16 }}>
-          <select value={roadFilter} onChange={(e) => setRoadFilter(e.target.value)} style={{ ...input, maxWidth: 320 }}>
-            <option value="all">Все дороги</option>
-            {roadsWithEntries.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
+      {(regionsWithEntries.length > 1 || roadsWithEntries.length > 1) && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          {regionsWithEntries.length > 1 && (
+            <select
+              value={regionFilter}
+              onChange={(e) => { setRegionFilter(e.target.value); setRoadFilter("all"); }}
+              style={{ ...input, maxWidth: 260 }}
+            >
+              <option value="all">Все области</option>
+              {regionsWithEntries.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          )}
+          {roadsWithEntries.length > 1 && (
+            <select value={roadFilter} onChange={(e) => setRoadFilter(e.target.value)} style={{ ...input, maxWidth: 320 }}>
+              <option value="all">Все дороги</option>
+              {roadsWithEntries.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          )}
         </div>
       )}
 
@@ -1253,7 +1343,13 @@ function Dashboard({ entries, refresh }) {
                     {r.type === "defect" && <Badge {...DEFECT_STATUS[r.status]} small />}
                     {(r.type === "stage" || r.type === "hidden") && <Badge {...CONCLUSION[r.conclusion]} small />}
                   </div>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 2 }}>
+                  {r.region && (
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>{r.region}</div>
+                  )}
+                  <div
+                    style={{ fontSize: 14, fontWeight: 500, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={r.road}
+                  >
                     {r.road} · {r.km}
                   </div>
                   <div style={{ fontSize: 12.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
@@ -1305,21 +1401,27 @@ export default function App() {
     const now = Date.now();
     const demo = [
       {
-        id: uid(), type: "stage", road: "Алматы - Хоргос", km: "км 120–124", contractor: "КазДорСтрой",
+        id: uid(), type: "stage",
+        region: "Алматинская область", repairType: "Реконструкция",
+        road: "\"Курты-Бурылбайтал\" км 2214-2295", km: "км 2220–2224", contractor: "КазДорСтрой",
         engineerName: "А. Сериков", workType: "Асфальтобетонное покрытие", conclusion: "pass",
         volumePlanned: "4500", volumeActual: "4500", unit: "м²",
         photos: [], lat: 43.234, lng: 77.891, comment: "", createdAt: now - 3600e3,
         kajStatus: "confirmed", kajComment: "Проверено выборочно, замечаний нет.",
       },
       {
-        id: uid(), type: "hidden", road: "Астана - Павлодар", km: "км 15–18", contractor: "ДорСервис Астана",
+        id: uid(), type: "hidden",
+        region: "Акмолинская область", repairType: "Средний ремонт",
+        road: "Обход города Астана км 36-46 км", km: "км 40–42", contractor: "ДорСервис Астана",
         engineerName: "Б. Ахметова", workType: "Основание дорожной одежды", conclusion: "fail",
         volumePlanned: "3000", volumeActual: "2650", unit: "м³",
         photos: [], lat: 51.112, lng: 75.55, comment: "Толщина слоя ниже проектной на отдельных участках.",
         createdAt: now - 7200e3, kajStatus: "pending", kajComment: "",
       },
       {
-        id: uid(), type: "defect", road: "Алматы - Конаев", km: "км 8", contractor: "КазДорСтрой",
+        id: uid(), type: "defect",
+        region: "Область Жетысу", repairType: "Реконструкция",
+        road: "Реонструкция автомобильной дороги KZ 19-02 \"Ушарал-Достык\" км 2,9-30", km: "км 8", contractor: "КазДорСтрой",
         engineerName: "А. Сериков", workType: "Асфальтобетонное покрытие", severity: "high",
         deadline: new Date(now + 7 * 86400e3).toISOString().slice(0, 10),
         contractorEmail: "", status: "open", fixPhotos: [],
@@ -1327,7 +1429,9 @@ export default function App() {
         createdAt: now - 86400e3 * 2, kajStatus: "confirmed", kajComment: "Согласен, требует немедленного устранения.",
       },
       {
-        id: uid(), type: "volume", road: "Шымкент - Тараз", km: "км 30–45", contractor: "ЮгДорСтрой",
+        id: uid(), type: "volume",
+        region: "Жамбылская область", repairType: "Строительство и реконструкция",
+        road: "Реконструкция автомобильной дороги гр. РФ (на Екатеринбург)-Астана-Алматы", km: "км 30–45", contractor: "ЮгДорСтрой",
         engineerName: "Н. Касымов", workType: "Асфальтобетонное покрытие", quantity: "12000", unit: "м²",
         unitPrice: "8500", sum: 102000000,
         photos: [], lat: 42.9, lng: 69.6, comment: "", createdAt: now - 1800e3,

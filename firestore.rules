@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// Правила безопасности Firestore для приложения технадзора.
+// Скопируйте это в Firebase Console -> Firestore Database -> Rules -> Publish.
+//
+// MVP без логина: приложение открыто (любой со ссылкой может читать/писать),
+// но запись ограничена базовой проверкой структуры документа — это защита от
+// случайного мусора, а не от злоумышленника. Для продакшена с реальными
+// подрядчиками нужна аутентификация (Firebase Auth) и правила на её основе —
+// см. комментарий внизу.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /entries/{entryId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['type', 'road', 'createdAt'])
+                    && request.resource.data.type in ['stage', 'hidden', 'defect', 'volume'];
+      allow update: if true; // любой может подтвердить/оспорить/изменить статус (MVP)
+      allow delete: if true; // нужно для кнопки "очистить всё" в демо
+    }
+  }
+}
+
+// --- Для продакшена (следующий шаг) ---
+// 1. Включить Firebase Authentication (Email/Password или через организацию).
+// 2. Хранить роль пользователя (технадзор / КАЖ) в custom claims или в коллекции users.
+// 3. Заменить allow create/update/delete на проверки request.auth != null
+//    и, при необходимости, на роль (например, только КАЖ может менять kajStatus).

@@ -8,6 +8,13 @@ import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import emailjs from "@emailjs/browser";
 import ROADS_DATA from "./roadsData.json";
+import {
+  FIREBASE_CONFIGURED,
+  subscribeEntries,
+  addEntry as fbAddEntry,
+  updateEntry as fbUpdateEntry,
+  clearAllEntries as fbClearAllEntries,
+} from "./firebase";
 
 /* ============================================================
    СПРАВОЧНИКИ
@@ -597,6 +604,8 @@ function TechForm({ onSubmit }) {
   const [comment, setComment] = useState("");
   const [errors, setErrors] = useState({});
   const [sent, setSent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   // приёмка этапа / скрытые работы
   const [conclusion, setConclusion] = useState("pass");
@@ -619,6 +628,7 @@ function TechForm({ onSubmit }) {
     setPhotos([]); setComment(""); setErrors({}); setConclusion("pass");
     setVolumePlanned(""); setVolumeActual(""); setDefectName(""); setSeverity("medium"); setDeadline("");
     setContractorEmail(""); setQuantity(""); setUnitPrice(""); setSent(false);
+    setSubmitError("");
   };
 
   const roadOptions = roadsFor(region, repairType);
@@ -641,7 +651,7 @@ function TechForm({ onSubmit }) {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validate()) return;
     const base = {
       id: uid(),
@@ -676,10 +686,23 @@ function TechForm({ onSubmit }) {
         sum: unitPrice ? Number(quantity) * Number(unitPrice) : null,
       };
     }
-    const list = loadEntries();
-    saveEntries([entry, ...list]);
-    onSubmit();
-    setSent(true);
+    setSubmitError("");
+    setSubmitting(true);
+    try {
+      if (FIREBASE_CONFIGURED) {
+        await fbAddEntry(entry);
+      } else {
+        const list = loadEntries();
+        saveEntries([entry, ...list]);
+      }
+      onSubmit();
+      setSent(true);
+    } catch (e) {
+      console.error("Save entry error", e);
+      setSubmitError("Не удалось сохранить запись. Проверьте подключение к интернету и попробуйте снова.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (sent) {
@@ -907,9 +930,16 @@ function TechForm({ onSubmit }) {
           />
         </Field>
 
-        <button onClick={handleSubmit} style={btnPrimary}>
+        {submitError && (
+          <div style={{ ...noteBox, background: "#FEF2F2", color: "#991B1B", display: "flex", alignItems: "flex-start", gap: 6 }}>
+            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>{submitError}</span>
+          </div>
+        )}
+
+        <button onClick={handleSubmit} disabled={submitting} style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1 }}>
           <Send size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
-          Сохранить запись
+          {submitting ? "Сохраняем..." : "Сохранить запись"}
         </button>
       </div>
     </div>
@@ -1210,17 +1240,24 @@ function Dashboard({ entries, refresh }) {
     setTimeout(() => setEmailToast(null), 6000);
   };
 
-  const updateEntry = (id, patch) => {
-    const list = loadEntries();
-    const updated = list.map((r) => (r.id === id ? { ...r, ...patch } : r));
-    saveEntries(updated);
-    refresh();
+  const updateEntry = async (id, patch) => {
+    const current = entries.find((r) => r.id === id);
+    const updatedEntry = current ? { ...current, ...patch } : null;
+    if (FIREBASE_CONFIGURED) {
+      await fbUpdateEntry(id, patch);
+      // onSnapshot подхватит изменение автоматически и обновит entries/selected через refresh
+    } else {
+      const list = loadEntries();
+      const updated = list.map((r) => (r.id === id ? { ...r, ...patch } : r));
+      saveEntries(updated);
+      refresh();
+    }
     setSelected((s) => (s && s.id === id ? { ...s, ...patch } : s));
-    return updated.find((r) => r.id === id);
+    return updatedEntry;
   };
 
-  const handleKajDecision = (id, kajStatus, kajComment) => {
-    const updated = updateEntry(id, { kajStatus, kajComment });
+  const handleKajDecision = async (id, kajStatus, kajComment) => {
+    const updated = await updateEntry(id, { kajStatus, kajComment });
     if (updated && updated.type === "defect" && updated.contractorEmail) {
       notify(
         updated.contractorEmail,
@@ -1230,8 +1267,8 @@ function Dashboard({ entries, refresh }) {
     }
   };
 
-  const handleDefectStatusChange = (id, status, fixPhoto) => {
-    const updated = updateEntry(id, {
+  const handleDefectStatusChange = async (id, status, fixPhoto) => {
+    const updated = await updateEntry(id, {
       status,
       fixPhotos: fixPhoto ? [fixPhoto] : [],
     });
@@ -1479,14 +1516,35 @@ export default function App() {
   const [view, setView] = useState("tech");
   const [entries, setEntries] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [syncError, setSyncError] = useState("");
 
   const refresh = useCallback(() => {
-    setEntries(loadEntries());
-    setLoaded(true);
+    // В режиме Firestore данные приходят сами через подписку (onSnapshot);
+    // эта функция остаётся как no-op/ручной refresh для локального режима,
+    // и как синхронный триггер перерисовки для некоторых мест (напр. после отправки формы).
+    if (!FIREBASE_CONFIGURED) {
+      setEntries(loadEntries());
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
-    refresh();
+    if (FIREBASE_CONFIGURED) {
+      setSyncError("");
+      const unsubscribe = subscribeEntries(
+        (liveEntries) => {
+          setEntries(liveEntries);
+          setLoaded(true);
+        },
+        () => {
+          setSyncError("Не удалось подключиться к общей базе данных. Проверьте интернет-соединение.");
+          setLoaded(true);
+        }
+      );
+      return unsubscribe;
+    } else {
+      refresh();
+    }
   }, [refresh]);
 
   const seedDemo = () => {
@@ -1530,13 +1588,23 @@ export default function App() {
         kajStatus: "disputed", kajComment: "Запрошена лабораторная проверка фактического объёма.",
       },
     ];
-    saveEntries(demo);
-    refresh();
+    if (FIREBASE_CONFIGURED) {
+      Promise.all(demo.map((e) => { const { id, ...rest } = e; return fbAddEntry(rest); }))
+        .catch((err) => console.error("Seed demo error", err));
+      // entries обновится сам через подписку
+    } else {
+      saveEntries(demo);
+      refresh();
+    }
   };
 
   const clearAll = () => {
-    saveEntries([]);
-    refresh();
+    if (FIREBASE_CONFIGURED) {
+      fbClearAllEntries(entries).catch((err) => console.error("Clear all error", err));
+    } else {
+      saveEntries([]);
+      refresh();
+    }
   };
 
   return (
@@ -1558,6 +1626,23 @@ export default function App() {
           </button>
         )}
       </div>
+
+      {!FIREBASE_CONFIGURED && (
+        <div style={{ ...noteBox, background: "#FFF7ED", color: "#9A3412", marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 6 }}>
+          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            База данных не подключена — записи хранятся только в этом браузере и не видны на других
+            устройствах. См. .env.example для подключения Firebase.
+          </span>
+        </div>
+      )}
+
+      {syncError && (
+        <div style={{ ...noteBox, background: "#FEF2F2", color: "#991B1B", marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 6 }}>
+          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{syncError}</span>
+        </div>
+      )}
 
       {!loaded ? (
         <div style={{ textAlign: "center", padding: "3rem", color: "var(--text-secondary)" }}>Загрузка...</div>

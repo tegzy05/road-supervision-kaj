@@ -53,6 +53,74 @@ const WORK_TYPES = [
 // Единицы измерения объёмов работ
 const UNITS = ["м²", "м³", "п.м", "тонна", "шт", "км"];
 
+// Каталог типичных дефектов по виду работ — сужает список при выборе "Вид работ",
+// на основе реальных категорий дефектов (просадки, колейность, трещины и т.д.)
+const DEFECT_CATALOG = {
+  "Земляное полотно": [
+    "Просадка земляного полотна",
+    "Размыв / эрозия откоса",
+    "Пучение грунта",
+    "Недостаточное уплотнение",
+    "Деформация обочины",
+  ],
+  "Основание дорожной одежды": [
+    "Недостаточная толщина слоя",
+    "Слабое уплотнение основания",
+    "Просадка основания",
+    "Несоответствие фракции щебня",
+  ],
+  "Асфальтобетонное покрытие": [
+    "Выбоина",
+    "Просадка покрытия",
+    "Колейность",
+    "Шелушение / сегрегация",
+    "Поперечная трещина",
+    "Продольная трещина",
+    "Сетка трещин",
+    "Волны / сдвиги покрытия",
+    "Заниженная обочина",
+  ],
+  "Бетонные работы (ИССО, водопропускные трубы)": [
+    "Трещина в бетоне",
+    "Скол / разрушение бетона",
+    "Протечка шва",
+    "Коррозия арматуры",
+    "Деформация конструкции",
+  ],
+  "Армирование": [
+    "Недостаточный защитный слой",
+    "Коррозия арматуры",
+    "Несоответствие шага армирования",
+  ],
+  "Дорожная разметка": [
+    "Истирание / выцветание разметки",
+    "Отсутствует разметка",
+    "Несоответствие ГОСТ по ширине/шагу",
+  ],
+  "Дорожные знаки / ограждения": [
+    "Повреждённый дорожный знак",
+    "Отсутствует знак",
+    "Повреждённое барьерное ограждение",
+    "Коррозия ограждения",
+  ],
+  "Освещение": [
+    "Неработающий светильник",
+    "Короткое замыкание",
+    "Повреждённая опора освещения",
+  ],
+  "Водоотвод / дренаж": [
+    "Затопление / подтопление",
+    "Засорён водопропускной лоток",
+    "Разрушение водоотводного сооружения",
+    "Заниженный уклон водоотвода",
+  ],
+  "Другое": [],
+};
+
+function defectsFor(workType) {
+  return DEFECT_CATALOG[workType] || [];
+}
+
 // Типы записей (унифицированная модель)
 const ENTRY_TYPES = {
   stage: { label: "Приёмка этапа", icon: ClipboardCheck, color: "#2563EB", bg: "#DBEAFE" },
@@ -537,6 +605,7 @@ function TechForm({ onSubmit }) {
   const [unit, setUnit] = useState(UNITS[0]);
 
   // дефект
+  const [defectName, setDefectName] = useState("");
   const [severity, setSeverity] = useState("medium");
   const [deadline, setDeadline] = useState("");
   const [contractorEmail, setContractorEmail] = useState("");
@@ -548,11 +617,12 @@ function TechForm({ onSubmit }) {
   const reset = () => {
     setRegion(""); setRepairType(""); setRoad(""); setKm(""); setContractor(""); setWorkType(""); setCoords(null);
     setPhotos([]); setComment(""); setErrors({}); setConclusion("pass");
-    setVolumePlanned(""); setVolumeActual(""); setSeverity("medium"); setDeadline("");
+    setVolumePlanned(""); setVolumeActual(""); setDefectName(""); setSeverity("medium"); setDeadline("");
     setContractorEmail(""); setQuantity(""); setUnitPrice(""); setSent(false);
   };
 
   const roadOptions = roadsFor(region, repairType);
+  const defectOptions = defectsFor(workType);
 
   const validate = () => {
     const e = {};
@@ -564,6 +634,7 @@ function TechForm({ onSubmit }) {
     if (!coords) e.coords = "Определите геолокацию";
     if (photos.length === 0) e.photo = "Приложите хотя бы одно фото";
     if (entryType !== "volume" && !workType) e.workType = "Выберите вид работ";
+    if (entryType === "defect" && !defectName) e.defectName = "Выберите или впишите дефект";
     if (entryType === "defect" && !deadline) e.deadline = "Укажите срок устранения";
     if (entryType === "volume" && !quantity) e.quantity = "Укажите объём";
     setErrors(e);
@@ -593,7 +664,7 @@ function TechForm({ onSubmit }) {
       };
     } else if (entryType === "defect") {
       entry = {
-        ...base, workType, severity, deadline,
+        ...base, workType, defectName, severity, deadline,
         contractorEmail,
         status: "open",
         fixPhotos: [],
@@ -694,7 +765,12 @@ function TechForm({ onSubmit }) {
 
         {entryType !== "volume" && (
           <Field label="Вид работ" error={errors.workType}>
-            <ComboSelect value={workType} onChange={setWorkType} options={WORK_TYPES} placeholder="Выберите вид работ" />
+            <ComboSelect
+              value={workType}
+              onChange={(v) => { setWorkType(v); setDefectName(""); }}
+              options={WORK_TYPES}
+              placeholder="Выберите вид работ"
+            />
           </Field>
         )}
 
@@ -749,6 +825,18 @@ function TechForm({ onSubmit }) {
 
         {entryType === "defect" && (
           <>
+            <Field
+              label="Список дефектов"
+              error={errors.defectName}
+              hint={workType ? undefined : "Сначала выберите вид работ — список дефектов сузится под него"}
+            >
+              <ComboSelect
+                value={defectName}
+                onChange={setDefectName}
+                options={defectOptions}
+                placeholder={workType ? "Выберите дефект" : "Выберите дефект (сначала вид работ)"}
+              />
+            </Field>
             <Field label="Серьёзность">
               <div style={{ display: "flex", gap: 8 }}>
                 {[
@@ -986,6 +1074,7 @@ function EntryDetailModal({ entry, onClose, onKajDecision, onDefectStatusChange 
             )}
             {entry.type === "defect" && (
               <>
+                <tr><td style={tdLabel}>Дефект</td><td style={tdVal}>{entry.defectName || "—"}</td></tr>
                 <tr><td style={tdLabel}>Статус</td><td style={tdVal}><Badge {...DEFECT_STATUS[entry.status]} small /></td></tr>
                 <tr><td style={tdLabel}>Срок устранения</td><td style={tdVal}>{entry.deadline}</td></tr>
               </>
@@ -1346,6 +1435,9 @@ function Dashboard({ entries, refresh }) {
                   {r.region && (
                     <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>{r.region}</div>
                   )}
+                  {r.type === "defect" && r.defectName && (
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#DC2626", marginBottom: 1 }}>{r.defectName}</div>
+                  )}
                   <div
                     style={{ fontSize: 14, fontWeight: 500, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     title={r.road}
@@ -1422,7 +1514,7 @@ export default function App() {
         id: uid(), type: "defect",
         region: "Область Жетысу", repairType: "Реконструкция",
         road: "Реонструкция автомобильной дороги KZ 19-02 \"Ушарал-Достык\" км 2,9-30", km: "км 8", contractor: "КазДорСтрой",
-        engineerName: "А. Сериков", workType: "Асфальтобетонное покрытие", severity: "high",
+        engineerName: "А. Сериков", workType: "Асфальтобетонное покрытие", defectName: "Продольная трещина", severity: "high",
         deadline: new Date(now + 7 * 86400e3).toISOString().slice(0, 10),
         contractorEmail: "", status: "open", fixPhotos: [],
         photos: [], lat: 43.6, lng: 77.4, comment: "Трещина на всю ширину полосы.",
